@@ -222,7 +222,8 @@ func (cfg *apiConfig) handleGetChirp(w http.ResponseWriter, r *http.Request) {
 	chirp, err := cfg.dbQueries.GetChirp(r.Context(), uuid)
 
 	if err != nil {
-		respondWithJSON(w, 404, "do not exist")
+		respondWithError(w, 404, "chirp not found")
+		return
 	}
 
 	respBody := toChirp(chirp)
