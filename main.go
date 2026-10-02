@@ -243,7 +243,19 @@ func toChirp(c database.Chirp) chirpParameters {
 }
 
 func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.dbQueries.GetChirps(r.Context())
+	var chirps []database.Chirp
+	var err error
+
+	if authorID := r.URL.Query().Get("author_id"); authorID != "" {
+		userID, parseErr := uuid.Parse(authorID)
+		if parseErr != nil {
+			respondWithError(w, 400, "invalid author_id")
+			return
+		}
+		chirps, err = cfg.dbQueries.GetChirpsByAuthor(r.Context(), userID)
+	} else {
+		chirps, err = cfg.dbQueries.GetChirps(r.Context())
+	}
 
 	if err != nil {
 		respondWithError(w, 500, "Couldn't retrieve chirps")
@@ -253,6 +265,10 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, r *http.Request) {
 	respBody := make([]chirpParameters, 0, len(chirps))
 	for _, c := range chirps {
 		respBody = append(respBody, toChirp(c))
+	}
+
+	if r.URL.Query().Get("sort") == "desc" {
+		slices.Reverse(respBody)
 	}
 
 	respondWithJSON(w, 200, respBody)
