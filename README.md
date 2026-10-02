@@ -25,33 +25,90 @@ those layers actually do.
 
 ## API
 
-| Method | Path | Auth | Description |
+Everything is JSON over HTTP, served from `http://localhost:1337`. Errors come
+back as `{"error": "<message>"}` with the matching status code.
+
+### Authentication
+
+Two tokens, two jobs:
+
+| | Access token | Refresh token |
+| --- | --- | --- |
+| Format | JWT, HS256 | 256 bits of randomness, hex |
+| Lifetime | 1 hour | 60 days |
+| Stored server-side | no | yes, in `refresh_tokens` |
+| Revocable | no | yes, via `POST /api/revoke` |
+| Used on | every authenticated endpoint | `/api/refresh` and `/api/revoke` only |
+
+Both travel in the same header, `Authorization: Bearer <token>`. The access
+token is deliberately unrevocable: nothing is looked up to validate it, only
+the signature is checked, which is what makes it cheap. The refresh token is
+the part you can take back, so it is the only one worth storing.
+
+The Polka webhook uses a third scheme, a shared API key:
+`Authorization: ApiKey <POLKA_KEY>`.
+
+### Users and sessions
+
+| Method | Path | Auth | Returns |
 | --- | --- | --- | --- |
-| `GET` | `/api/healthz` | — | Readiness probe |
-| `POST` | `/api/users` | — | Create a user (email + password) |
-| `POST` | `/api/login` | — | Authenticate, returns the user and a JWT |
-| `POST` | `/api/chirps` | Bearer JWT | Post a chirp |
-| `GET` | `/api/chirps` | — | List all chirps |
-| `GET` | `/api/chirps/{chirpID}` | — | Fetch a single chirp |
-| `GET` | `/admin/metrics` | — | File-server hit counter |
-| `POST` | `/admin/reset` | dev only | Reset hits and delete all users |
-| `GET` | `/app/` | — | Static file server (instrumented) |
+| `POST` | `/api/users` | — | `201` with the user |
+| `POST` | `/api/login` | — | `200` with the user, an access token and a refresh token |
+| `PUT` | `/api/users` | access token | `200` with the updated user |
+| `POST` | `/api/refresh` | refresh token | `200` with a fresh access token |
+| `POST` | `/api/revoke` | refresh token | `204`, the refresh token is dead |
 
-Chirps are capped at 140 characters and a small profanity list is masked
-before storage. `POST /admin/reset` is destructive and refuses to run unless
-`PLATFORM=dev`.
+`POST /api/users` and `PUT /api/users` both take `{"email", "password"}`.
+Passwords are hashed with argon2id and never returned.
 
-### Example
+### Chirps
+
+| Method | Path | Auth | Returns |
+| --- | --- | --- | --- |
+| `POST` | `/api/chirps` | access token | `201` with the chirp |
+| `GET` | `/api/chirps` | — | `200` with every chirp |
+| `GET` | `/api/chirps/{chirpID}` | — | `200`, or `404` if unknown |
+| `DELETE` | `/api/chirps/{chirpID}` | access token | `204`, or `403` if you are not the author |
+
+`GET /api/chirps` takes two optional query parameters:
+
+| Parameter | Values | Effect |
+| --- | --- | --- |
+| `author_id` | a user UUID | Only that author's chirps; `400` if it is not a UUID |
+| `sort` | `asc` (default), `desc` | Order by creation date |
+
+Chirps are capped at 140 characters, and a small profanity list is masked
+before storage.
+
+### Admin and webhooks
+
+| Method | Path | Auth | Returns |
+| --- | --- | --- | --- |
+| `GET` | `/api/healthz` | — | `200 OK`, plain text |
+| `GET` | `/admin/metrics` | — | HTML page with the file-server hit count |
+| `POST` | `/admin/reset` | `PLATFORM=dev` | `200` after deleting every user, `403` otherwise |
+| `POST` | `/api/polka/webhooks` | API key | `204` |
+| `GET` | `/app/` | — | Static file server, counted by the metrics middleware |
+
+`POST /admin/reset` is destructive and refuses to run outside a dev platform.
+
+The webhook body is `{"event": "...", "data": {"user_id": "..."}}`. Only
+`user.upgraded` does anything — it flips `is_chirpy_red` on the user. Any
+other event is acknowledged with `204` and ignored, because a sender that
+gets an error will keep retrying. A wrong or missing API key is `401`, an
+unknown user is `404`.
+
+### A full exchange
 
 ```bash
-curl -X POST localhost:8090/api/users \
+curl -X POST localhost:1337/api/users \
   -d '{"email":"user@example.com","password":"correct horse battery staple"}'
 
-TOKEN=$(curl -sX POST localhost:8090/api/login \
+TOKEN=$(curl -sX POST localhost:1337/api/login \
   -d '{"email":"user@example.com","password":"correct horse battery staple"}' \
   | jq -r .token)
 
-curl -X POST localhost:8090/api/chirps \
+curl -X POST localhost:1337/api/chirps \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"body":"Hello world"}'
 ```
@@ -66,6 +123,7 @@ Create a `.env` file at the repository root (it is git-ignored):
 ```
 DB_URL="postgres://user:password@localhost:5432/chirpy?sslmode=disable"
 JWT_SECRET="a-long-random-string"
+POLKA_KEY="the-key-polka-signs-its-webhooks-with"
 PLATFORM="dev"
 ```
 
@@ -78,7 +136,7 @@ goose -dir sql/schema postgres "$DB_URL" up
 go run .
 ```
 
-The server listens on port `8090`.
+The server listens on port `1337`.
 
 Regenerate the database layer after editing anything under `sql/` with
 `sqlc generate`.
@@ -89,24 +147,24 @@ Regenerate the database layer after editing anything under `sql/` with
 go test ./...
 ```
 
-The `internal/auth` suite covers the hashing round-trip, salt randomness, JWT
-round-trip, expired tokens, a wrong signing secret, an unexpected signing
-method, and malformed tokens.
+The `internal/auth` suite covers password hashing and verification, salt
+randomness, the JWT round-trip, expired tokens, a wrong signing secret, an
+unexpected signing method, malformed tokens, and the parsing of both
+`Authorization` schemes.
 
 ## Progress
 
-Chapters completed up to **chapter 6 — Authentication**, currently at lesson 8
-(refresh tokens).
+Boot.dev *Learn Web Servers*, complete through the Webhooks chapter:
 
 - [x] Static file server, metrics middleware, readiness endpoint
 - [x] PostgreSQL, goose migrations, sqlc-generated queries
 - [x] Users, argon2id password hashing
 - [x] Chirps: create, list, fetch by id, validation and profanity masking
 - [x] Login with a signed JWT
-- [ ] Refresh tokens and short-lived access tokens
-- [ ] Authorization on update and delete
-- [ ] Webhooks, API keys
-- [ ] Deployment
+- [x] Refresh tokens, with revocation
+- [x] Authorization: users update their own account, authors delete their own chirps
+- [x] Polka webhooks, authenticated with an API key
+- [x] This README
 
 ## About
 
