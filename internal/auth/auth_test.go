@@ -2,13 +2,14 @@ package auth_test
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/n4yk0/chirpy/internal/auth"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/n4yk0/chirpy/internal/auth"
 )
 
 const testSecret = "test-secret-do-not-use-in-production"
@@ -232,6 +233,39 @@ func TestValidateJWTRejectsMalformedToken(t *testing.T) {
 			}
 			if got != uuid.Nil {
 				t.Errorf("ValidateJWT() = %v on error, want uuid.Nil", got)
+			}
+		})
+	}
+}
+
+func TestGetAPIKey(t *testing.T) {
+	cases := []struct {
+		name string
+		header string
+		want string
+		wantErr bool
+	}{
+		{"valid", "ApiKey abc123", "abc123", false},
+		{"missing header", "", "", true},
+		{"bearer scheme", "Bearer abc123", "", true},
+		{"no space", "ApiKeyabc123", "", true},
+		{"empty key", "ApiKey ", "", true},
+		{"lowercase scheme", "apikey abc123", "", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			headers := http.Header{}
+			if tc.header != "" {
+				headers.Set("Authorization", tc.header)
+			}
+
+			got, err := auth.GetAPIKey(headers)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
 	}
