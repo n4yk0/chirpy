@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
@@ -32,11 +34,11 @@ func CheckPasswordHash(password string, hash string) (bool, error) {
 
 func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (string, error) {
 	now := time.Now().UTC()
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims {
-		Issuer: "chirpy-access",
-		IssuedAt: jwt.NewNumericDate(now),
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+		Issuer:    "chirpy-access",
+		IssuedAt:  jwt.NewNumericDate(now),
 		ExpiresAt: jwt.NewNumericDate(now.Add(expiresIn)),
-		Subject: userID.String(),
+		Subject:   userID.String(),
 	})
 
 	return token.SignedString([]byte(tokenSecret))
@@ -45,11 +47,11 @@ func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (str
 func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	claims := jwt.RegisteredClaims{}
 	_, err := jwt.ParseWithClaims(
-		tokenString, 
-		&claims, 
+		tokenString,
+		&claims,
 		func(t *jwt.Token) (interface{}, error) {
 			return []byte(tokenSecret), nil
-		}, 
+		},
 		jwt.WithValidMethods([]string{"HS256"}),
 	)
 
@@ -59,7 +61,6 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 
 	return uuid.Parse(claims.Subject)
 }
-
 
 func GetBearerToken(headers http.Header) (string, error) {
 	authHeader := headers.Get("Authorization")
@@ -79,4 +80,12 @@ func GetBearerToken(headers http.Header) (string, error) {
 	}
 
 	return token, nil
+}
+
+func MakeRefreshtoken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
