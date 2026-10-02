@@ -21,7 +21,7 @@ import (
 
 const (
 	filepathRoot = "."
-	port         = "8080"
+	port         = "1337"
 )
 
 var profanity = []string{"kerfuffle", "sharbert", "fornax"}
