@@ -1,27 +1,84 @@
 # Chirpy
 
-A Twitter-like HTTP API written in Go, backed by PostgreSQL. Users register,
-log in against argon2id password hashes, receive a signed JWT, and post
-short messages ("chirps").
+A Twitter-like HTTP API in Go, backed by PostgreSQL. Users register, log in,
+and post short messages ("chirps"). Built from scratch on the standard
+library as part of the [Boot.dev](https://boot.dev) DevOps path, in the
+*Learn Web Servers* course: no web framework, no ORM.
 
-This project is built as part of the [Boot.dev](https://boot.dev) **DevOps
-career path**, in the *Learn Web Servers* course. It is a learning project,
-written from scratch rather than scaffolded: routing, authentication,
-migrations and data access are all hand-rolled on the Go standard library.
+## What it does
+
+- Registration and login with email and password
+- Post, list, read and delete chirps, capped at 140 characters
+- Sessions built on a short-lived access token and a long-lived, revocable
+  refresh token
+- Users update their own account; authors delete their own chirps
+- Paid "Chirpy Red" upgrades, applied from a payment provider's webhook
+- Static file server with a request counter, and a dev-only reset endpoint
+
+## What it demonstrates
+
+- **HTTP without a framework** — method-aware routing, path wildcards and
+  handler-wrapping middleware on `net/http` alone
+- **Authentication designed, not copied** — HS256 JWTs validated against
+  expiry *and* signing method, refresh tokens stored and revocable,
+  argon2id password hashing, two `Authorization` schemes over three
+  distinct credentials
+- **Authorization as a distinct concern** — 401 for who you are, 403 for
+  what you may touch
+- **SQL kept first-class** — versioned goose migrations, queries written as
+  SQL and compiled to type-safe Go by sqlc
+- **A webhook receiver that survives retries** — unknown events are
+  acknowledged rather than rejected, since a sender that gets an error
+  replays it
+- **Table-driven tests on the security-critical package** — hashing, token
+  round-trips, expiry, wrong secret, forged signing method, malformed input
+- **The details REST gets wrong** — accurate status codes, optional query
+  parameters that default instead of failing, and errors that never reveal
+  which half of a credential was wrong
 
 ## Stack
 
 | Concern | Choice |
 | --- | --- |
-| HTTP | `net/http` `ServeMux` (Go 1.22+ method and wildcard routing) — no framework |
+| HTTP | `net/http` `ServeMux` (Go 1.22+ method and wildcard routing) |
 | Database | PostgreSQL |
 | Migrations | [goose](https://github.com/pressly/goose) |
 | Data access | [sqlc](https://sqlc.dev) — type-safe Go generated from plain SQL |
 | Password hashing | [argon2id](https://github.com/alexedwards/argon2id) |
 | Tokens | [golang-jwt/jwt v5](https://github.com/golang-jwt/jwt), HS256 |
 
-No ORM and no web framework: the point of the exercise is to understand what
-those layers actually do.
+## Install and run
+
+Requirements: Go 1.26+, PostgreSQL, [goose](https://github.com/pressly/goose)
+and, to regenerate the data layer, [sqlc](https://sqlc.dev).
+
+```bash
+git clone https://github.com/n4yk0/chirpy.git
+cd chirpy
+go mod download
+```
+
+Create a database, then a `.env` file at the repository root (it is
+git-ignored):
+
+```
+DB_URL="postgres://user:password@localhost:5432/chirpy?sslmode=disable"
+JWT_SECRET="a-long-random-string"
+POLKA_KEY="the-key-the-payment-provider-signs-its-webhooks-with"
+PLATFORM="dev"
+```
+
+Generate `JWT_SECRET` with `openssl rand -base64 64`. `PLATFORM` must be
+`dev` for `POST /admin/reset` to work, and anything else in production.
+
+Apply the migrations and start the server on port `1337`:
+
+```bash
+goose -dir sql/schema postgres "$DB_URL" up
+go run .
+```
+
+Run `sqlc generate` after editing anything under `sql/`.
 
 ## API
 
@@ -40,12 +97,10 @@ Two tokens, two jobs:
 | Revocable | no | yes, via `POST /api/revoke` |
 | Used on | every authenticated endpoint | `/api/refresh` and `/api/revoke` only |
 
-Both travel in the same header, `Authorization: Bearer <token>`. The access
-token is deliberately unrevocable: nothing is looked up to validate it, only
-the signature is checked, which is what makes it cheap. The refresh token is
-the part you can take back, so it is the only one worth storing.
-
-The Polka webhook uses a third scheme, a shared API key:
+Both travel as `Authorization: Bearer <token>`. The access token is
+unrevocable by design — validating it reads nothing but its own signature,
+which is what makes it cheap — so the refresh token is the one worth
+storing. The webhook endpoint uses a third scheme,
 `Authorization: ApiKey <POLKA_KEY>`.
 
 ### Users and sessions
@@ -93,10 +148,9 @@ before storage.
 `POST /admin/reset` is destructive and refuses to run outside a dev platform.
 
 The webhook body is `{"event": "...", "data": {"user_id": "..."}}`. Only
-`user.upgraded` does anything — it flips `is_chirpy_red` on the user. Any
-other event is acknowledged with `204` and ignored, because a sender that
-gets an error will keep retrying. A wrong or missing API key is `401`, an
-unknown user is `404`.
+`user.upgraded` acts, flipping `is_chirpy_red`; every other event is
+acknowledged and ignored, because a sender that gets an error replays it.
+A wrong or missing key is `401`, an unknown user `404`.
 
 ### A full exchange
 
@@ -113,34 +167,6 @@ curl -X POST localhost:1337/api/chirps \
   -d '{"body":"Hello world"}'
 ```
 
-## Running it
-
-Requirements: Go 1.26+, PostgreSQL, and [goose](https://github.com/pressly/goose)
-for the migrations.
-
-Create a `.env` file at the repository root (it is git-ignored):
-
-```
-DB_URL="postgres://user:password@localhost:5432/chirpy?sslmode=disable"
-JWT_SECRET="a-long-random-string"
-POLKA_KEY="the-key-polka-signs-its-webhooks-with"
-PLATFORM="dev"
-```
-
-Generate `JWT_SECRET` with `openssl rand -base64 64`.
-
-Apply the migrations, then start the server:
-
-```bash
-goose -dir sql/schema postgres "$DB_URL" up
-go run .
-```
-
-The server listens on port `1337`.
-
-Regenerate the database layer after editing anything under `sql/` with
-`sqlc generate`.
-
 ## Tests
 
 ```bash
@@ -151,20 +177,6 @@ The `internal/auth` suite covers password hashing and verification, salt
 randomness, the JWT round-trip, expired tokens, a wrong signing secret, an
 unexpected signing method, malformed tokens, and the parsing of both
 `Authorization` schemes.
-
-## Progress
-
-Boot.dev *Learn Web Servers*, complete through the Webhooks chapter:
-
-- [x] Static file server, metrics middleware, readiness endpoint
-- [x] PostgreSQL, goose migrations, sqlc-generated queries
-- [x] Users, argon2id password hashing
-- [x] Chirps: create, list, fetch by id, validation and profanity masking
-- [x] Login with a signed JWT
-- [x] Refresh tokens, with revocation
-- [x] Authorization: users update their own account, authors delete their own chirps
-- [x] Polka webhooks, authenticated with an API key
-- [x] This README
 
 ## About
 
