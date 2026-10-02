@@ -352,7 +352,7 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refreshToken, err := auth.MakeRefreshtoken()
+	refreshToken, err := auth.MakeRefreshToken()
 	if err != nil {
 		respondWithError(w, 500, "couldn't create refresh token")
 		return

@@ -82,7 +82,7 @@ func GetBearerToken(headers http.Header) (string, error) {
 	return token, nil
 }
 
-func MakeRefreshtoken() (string, error) {
+func MakeRefreshToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
